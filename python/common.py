@@ -27,7 +27,7 @@ class HostDeviceMem(object):
 
 class BuilderCreationFlag():
     def __init__(self):
-        self.__trt_flags_dict = {"half":trt.BuilderFlag.FP16,
+        self.__trt_flags_dict = {"fp16":trt.BuilderFlag.FP16,
                                 "tf32":trt.BuilderFlag.TF32,
                                 "int8":trt.BuilderFlag.INT8,
                                 "debug":trt.BuilderFlag.DEBUG,
@@ -35,8 +35,14 @@ class BuilderCreationFlag():
                                 "refit":trt.BuilderFlag.REFIT,
                                 "share_time_cache":trt.BuilderFlag.DISABLE_TIMING_CACHE}
 
-    def ld(self, flag_name:str):
-        return self.__trt_flags_dict[flag_name]
+    def set(self, config, flag_name):
+        if isinstance(flag_name, str):
+            config.set_flag(self.__trt_flags_dict[flag_name])
+        elif isinstance(flag_name, list):
+            [config.set_flag(self.__trt_flags_dict[it]) for it in flag_name]
+        else:
+            raise ValueError("Input argument is not supported.")
+        return config
 
 
 def get_trt_type(np_type:np.dtype)->trt.DataType:
@@ -95,6 +101,6 @@ def printIOInfo(engine, context=None)->None:
         print("input" if engine.binding_is_input(i) else "output", 
                 engine.get_binding_name(i), 
                 engine.get_binding_dtype(i), 
-                engine.get_binding_shape(i), context.get_binding_shape(i) if dynamic_shape else None)
+                engine.get_binding_shape(i), context.get_binding_shape(i) if dynamic_shape else "")
 
 

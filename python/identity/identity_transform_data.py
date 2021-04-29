@@ -13,7 +13,7 @@ from common import allocate_buffer, printIOInfo, get_trt_type
 
 # -------------------------------------------------------------------------------- #
 # Global Variables
-BENCH = False
+BENCH = True
 TRT_LOGGER = trt.Logger(trt.Logger.VERBOSE)
 WORKSPACE_SIZE = 1<<30
 BATCH_MODE = 1<<int(trt.NetworkDefinitionCreationFlag.EXPLICIT_BATCH) if True else 0
@@ -43,7 +43,7 @@ def trt_execute(context, input_data):
 # -------------------------------------------------------------------------------- #
 # Data Preparation
 input_dtype = np.float32
-input_shape = [3,2,2,2]
+input_shape = [3,2,2,5]
 input_data = np.arange(start=0,stop=np.prod(input_shape),dtype=input_dtype).reshape(input_shape)
 print("Input:\n", input_data if input_data.size < 50 else input_data[:][:][:min(5,input_shape[-2])][:min(5,input_shape[-1])])
 
@@ -57,7 +57,7 @@ network = builder.create_network(BATCH_MODE)
 profile = builder.create_optimization_profile()
 config = builder.create_builder_config()
 config.max_workspace_size = builder.max_workspace_size
-config = builder_flag.set(config, ["tf32"])
+config = builder_flag.set(config, ["tf32", "fp16", "strict_type"])
 
 input_tensor = network.add_input(name="input_tensor_0", dtype=get_trt_type(input_dtype), shape=(-1,-1,-1,-1))
 profile.set_shape("input_tensor_0", min=(1,1,1,1),
@@ -67,21 +67,39 @@ config.add_optimization_profile(profile)
 
 
 # ----- MODIFY CODE FOR NETWORK HERE ----- #
-identity_layer = network.add_identity(input_tensor)
-identity_layer.name = "identity_layer_1"
-# identity_layer.get_output(0).dtype = trt.float32
+preprocess_layer = network.add_scale(input_tensor,
+                                    mode=trt.ScaleMode.UNIFORM,
+                                    scale=None,
+                                    shift=np.array([1] ,dtype=np.float32),
+                                    power=None)
+preprocess_layer.name = "preprocess_layer"
 
-out_layer = network.add_identity(identity_layer.get_output(0))
-out_layer.name = "out_layer_1"
+identity_layer_1 = network.add_identity(preprocess_layer.get_output(0))
+identity_layer_1.name = "identity_layer_1"
+# identity_layer_1.get_output(0).dtype = trt.float32
 
+identity_layer_2 = network.add_identity(preprocess_layer.get_output(0))
+identity_layer_2.name = "identity_layer_2"
+# identity_layer_2.set_output_type(0, trt.float16)
+identity_layer_2.get_output(0).dtype = trt.float16
+
+out_layer_1 = network.add_elementwise(identity_layer_1.get_output(0), identity_layer_2.get_output(0), op=trt.ElementWiseOperation.SUM)
+out_layer_1.name = "out_layer_1"
+# out_layer_1.get_input(0).dtype = trt.float16
+# out_layer_1.get_output(0).dtype = trt.float16
+out_layer_2 = network.add_elementwise(preprocess_layer.get_output(0), preprocess_layer.get_output(0), op=trt.ElementWiseOperation.SUM)
+out_layer_2.name = "out_layer_2"
+out_layer_2.get_input(0).dtype = trt.float16
+out_layer_2.get_input(1).dtype = trt.float32
 
 # ----- MODIFY CODE FOR OUTPUT HERE ----- #
-output_layer = [out_layer]
+output_layer = [out_layer_1, out_layer_2]
 output_tensor = [it.get_output(0) for it in output_layer]
 for i,it in enumerate(output_tensor):
     it.name = "output_tensor_" + str(i)
     output_tensor_names.append(it.name)
 [network.mark_output(it) for it in output_tensor]
+network.get_output(0).dtype = trt.float16
 
 
 # CUDA Engine
@@ -94,36 +112,12 @@ with network, builder:
     pass
 printIOInfo(engine, context)
 
+
 rng = nvtx.start_range(message="execution_phase", color="blue")
 _, outputs, _, _ = trt_execute(context, input_data)
 nvtx.end_range(rng)
 
 [print("Output_"+str(id)+":\n", outputs[id].host.reshape(context.get_binding_shape(engine.get_binding_index(it)))) for id,it in enumerate(output_tensor_names)]
-
-
-# Serialization and deserialization test
-try:
-    os.remove(engine_file_name)
-except FileNotFoundError:
-    print("[Remove engine] {} is not found.".format(engine_file_name))
-with open(engine_file_name, "wb") as f:
-    f.write(engine.serialize())
-
-if os.path.isfile(engine_file_name):
-    with open(engine_file_name, "rb") as f:
-        engine_bs = f.read()
-    des_engine = trt.Runtime(TRT_LOGGER).deserialize_cuda_engine(engine_bs)
-    des_msg = "[Deserialize engine] " + ("Fail to load engine." if des_engine is None else "Succeed to load engine.")
-    print(des_msg)
-
-des_context = des_engine.create_execution_context()
-des_context.set_binding_shape(0, input_data.shape) # Only one input tensor here.
-
-rng = nvtx.start_range(message="execution_phase", color="blue")
-_, outputs, _, _ = trt_execute(context, input_data)
-nvtx.end_range(rng)
-
-[print("Output_"+str(id)+":\n", outputs[id].host.reshape(des_context.get_binding_shape(des_engine.get_binding_index(it)))) for id,it in enumerate(output_tensor_names)]
 
 
 # Destroy Execution Context and CUDA Engine
@@ -132,8 +126,4 @@ with context:
 with engine:
     print("destroy engine")
 
-with des_context:
-    print("destroy des_context")
-with des_engine:
-    print("destroy des_engine")
 print("All done.")
