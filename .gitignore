@@ -37,3 +37,4 @@ log/
 profile/
 *.[0-9]
 build/
+core
