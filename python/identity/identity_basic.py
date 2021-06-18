@@ -51,12 +51,12 @@ print("Input:\n", input_data if input_data.size < 50 else input_data[:][:][:min(
 # -------------------------------------------------------------------------------- #
 # Network Definition
 builder = trt.Builder(TRT_LOGGER)
-builder.max_workspace_size = WORKSPACE_SIZE
+#builder.max_workspace_size = WORKSPACE_SIZE
 
 network = builder.create_network(BATCH_MODE)
 profile = builder.create_optimization_profile()
 config = builder.create_builder_config()
-config.max_workspace_size = builder.max_workspace_size
+config.max_workspace_size = WORKSPACE_SIZE
 config = builder_flag.set(config, ["tf32"])
 
 input_tensor = network.add_input(name="input_tensor_0", dtype=get_trt_type(input_dtype), shape=(-1,-1,-1,-1))
@@ -125,15 +125,14 @@ nvtx.end_range(rng)
 
 [print("Output_"+str(id)+":\n", outputs[id].host.reshape(des_context.get_binding_shape(des_engine.get_binding_index(it)))) for id,it in enumerate(output_tensor_names)]
 
-
 # Destroy Execution Context and CUDA Engine
-with context:
-    print("destroy context")
-with engine:
-    print("destroy engine")
+#with context:
+#    print("destroy context")
+#with engine:
+#    print("destroy engine")
 
-with des_context:
-    print("destroy des_context")
-with des_engine:
-    print("destroy des_engine")
+#with des_context:
+#    print("destroy des_context")
+#with des_engine:
+#    print("destroy des_engine")
 print("All done.")
